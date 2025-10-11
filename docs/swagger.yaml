@@ -1,0 +1,35 @@
+basePath: /
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: REST API для GoBase проекта
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: GoBase API
+  version: "1.0"
+paths:
+  /ping:
+    get:
+      description: Проверяет доступность сервиса и подключение к базе данных
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+        "500":
+          description: Failed to connect DB
+          schema:
+            type: string
+      summary: Проверка здоровья сервиса
+      tags:
+      - healthcheck
+schemes:
+- http
+- https
+swagger: "2.0"

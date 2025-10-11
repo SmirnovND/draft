@@ -1,0 +1,8 @@
+# Пример конфигурационного файла
+# Скопируйте этот файл в config.yaml и настройте под свои нужды
+
+db:
+  dsn: "postgresql://developer:developer@localhost:5432/gobase?sslmode=disable"
+
+app:
+  run_addr: "localhost:8080"
