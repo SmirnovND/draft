@@ -18,11 +18,19 @@
 ┌────────────────────▼────────────────────────────────────┐
 │                   Use Cases                             │
 │              (Бизнес-логика приложения)                 │
+│          (Орхестрирует работу сервисов)                 │
+└────────────────────┬────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────┐
+│                   Services                              │
+│  (Domain Services + External Services + Some Services)                  │
+│  - Инкапсулируют работу с Repositories                  │
+│  - Интеграция с внешними системами                      │
 └────────────┬───────────────────────┬────────────────────┘
              │                       │
 ┌────────────▼────────────┐ ┌───────▼────────────────────┐
-│      Repositories       │ │       Services             │
-│  (Работа с БД)          │ │ (Email, SMS, External API) │
+│      Repositories       │ │  Other Service         │
+│  (Работа с БД)          │ │  (Email, SMS, API)         │
 └────────────┬────────────┘ └────────────────────────────┘
              │
 ┌────────────▼────────────────────────────────────────────┐
@@ -30,6 +38,8 @@
 │                   (PostgreSQL)                          │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Ключевое правило:** Use Cases работают **только** через Services, никогда напрямую через Repositories!
 
 ## Слои приложения
 
@@ -68,48 +78,68 @@ type User struct {
 
 ### 3. Service Layer (`internal/services/`)
 
-**Назначение:** Вспомогательные сервисы.
-
-**Примеры:**
-- Email сервис
-- SMS сервис
-- Работа с внешними API
-- Кэширование
-- Файловое хранилище
+**Назначение:** Слой сервисов - инкапсулирует работу с данными и внешними системами.
 
 **Характеристики:**
-- Независимы от бизнес-логики
-- Переиспользуемые компоненты
-- Могут использоваться в разных use cases
+- Узко специализированы (одна ответственность)
+- Инкапсулируют Repositories
+- Переиспользуются в разных Use Cases
+- Могут содержать простую бизнес-логику
+- Сервис может загружать в себя другой сервис
+
+**Пример Service:**
+```go
+type UserProfileService struct {
+    userRepo *repositories.UserRepository
+}
+
+func (s *UserProfileService) GetUser(ctx context.Context, id int64) (*domain.User, error) {
+    return s.userRepo.GetByID(ctx, id)
+}
+
+func (s *UserProfileService) CreateUser(ctx context.Context, name, email string) (*domain.User, error) {
+    user := &domain.User{Name: name, Email: email}
+    return user, s.userRepo.Create(ctx, user)
+}
+```
 
 ### 4. Use Case Layer (`internal/usecases/`)
 
 **Назначение:** Бизнес-логика приложения.
 
+Usecase получает **Services через DI**, никогда не работает с Repositories напрямую!
+
 **Характеристики:**
-- Оркестрирует работу репозиториев и сервисов
+- Оркестрирует работу сервисов
 - Содержит бизнес-правила
 - Не зависит от деталей реализации (HTTP, gRPC и т.д.)
+- Не имеет прямого доступа к Repositories
 
 **Пример:**
 ```go
+type UserUsecase struct {
+    userProfileService *services.UserProfileService  // ✅ Сервис
+    emailService       *services.EmailService         // ✅ Сервис
+}
+
 func (uc *UserUsecase) RegisterUser(ctx context.Context, name, email string) (*domain.User, error) {
-    // 1. Проверка бизнес-правил
-    if !uc.emailService.IsValid(ctx, email) {
-        return nil, errors.New("invalid email")
-    }
-    
-    // 2. Создание пользователя
-    user := &domain.User{Name: name, Email: email}
-    err := uc.userRepo.Create(ctx, user)
+    // 1. Создание пользователя через сервис
+    user, err := uc.userProfileService.CreateUser(ctx, name, email)
     if err != nil {
         return nil, err
     }
     
-    // 3. Отправка приветственного письма
-    uc.emailService.SendWelcome(ctx, email)
+    // 2. Отправка приветственного письма
+    _ = uc.emailService.SendEmail(ctx, email, "Welcome", "Thanks!")
     
     return user, nil
+}
+```
+
+**Неправильный пример (анти-паттерн):**
+```go
+type UserUsecase struct {
+    userRepo *repositories.UserRepository  // ❌ НЕПРАВИЛЬНО!
 }
 ```
 
@@ -170,22 +200,41 @@ func (uc *UserUsecase) RegisterUser(ctx context.Context, name, email string) (*d
 ```go
 // В container.go
 func (c *Container) provideDependencies() {
+    // 1. Базовые зависимости
     c.container.Provide(config.NewConfig())
     c.container.Provide(db.NewDB)
 }
 
-func (c *Container) provideRepo() {
+func (c *Container) provideRepositories() {
+    // 2. Репозитории (работают с БД)
     c.container.Provide(repositories.NewUserRepository)
+    c.container.Provide(repositories.NewHealthcheckRepository)
 }
 
-func (c *Container) provideUsecase() {
+func (c *Container) provideServices() {
+    // 3. Сервисы (работают с репозиториями)
+    c.container.Provide(services.NewUserProfileService)
+    c.container.Provide(services.NewHealthcheckService)
+    c.container.Provide(services.NewEmailService)
+}
+
+func (c *Container) provideUsecases() {
+    // 4. Usecases (работают с сервисами, не с репозиториями!)
     c.container.Provide(usecases.NewUserUsecase)
 }
 
-func (c *Container) provideController() {
+func (c *Container) provideControllers() {
+    // 5. Контроллеры (работают с usecases)
     c.container.Provide(controllers.NewUserController)
+    c.container.Provide(controllers.NewHealthcheckController)
 }
 ```
+
+**Зависимости:**
+- Controllers → Usecases
+- Usecases → Services
+- Services → Repositories
+- Repositories → Database
 
 ### Использование:
 
@@ -216,28 +265,29 @@ diContainer.Invoke(func(uc *controllers.UserController) {
    
 4. Use Case
    - Применяет бизнес-правила
-   - Вызывает UserRepository.Create
-   - Может вызвать EmailService.SendWelcome
+   - Вызывает UserProfileService.CreateUser (сервис!)
+   - Может вызвать EmailService.SendEmail (сервис!)
    
-5. Repository
+5. Services
+   - UserProfileService.CreateUser:
+     * Вызывает UserRepository.Create
+     * Возвращает созданного пользователя
+   - EmailService.SendEmail:
+     * Отправляет письмо через SMTP
+   
+6. Repository
    - Выполняет SQL INSERT
    - Возвращает созданного пользователя
    
-6. Controller
+7. Controller
    - Формирует JSON ответ
    - Устанавливает статус 201 Created
    
-7. HTTP Response
+8. HTTP Response
    {"id": 1, "name": "John", "email": "john@example.com", ...}
 ```
 
 ## Middleware
-
-Проект использует middleware для:
-- Логирования запросов
-- Обработки паник
-- CORS
-- Аутентификации (при необходимости)
 
 Middleware применяется в `cmd/server/main.go`:
 
@@ -247,6 +297,38 @@ http.ListenAndServe(addr, middleware.ChainMiddleware(
     logger.WithLogging,
 ))
 ```
+
+## Cron-скрипты
+
+### Назначение
+
+Cron-скрипты — это отдельные приложения для фоновых задач и периодических операций.
+
+**Примеры:**
+- Очистка старых данных
+- Отправка отложенных писем
+- Синхронизация с внешними системами
+- Переиндексация данных
+- Мониторинг и оповещения
+
+### Структура
+
+```
+cmd/crons/
+├── example/              # Пример cron-скрипта
+│   └── main.go          # Точка входа
+├── cleanup-records/     # Задача очистки
+│   └── main.go
+└── sync-external/       # Задача синхронизации
+    └── main.go
+```
+
+### Принципы
+
+1. **Переиспользование DI контейнера** - cron получает доступ к Services, Repositories, Logger
+2. **Независимость от HTTP** - работают как консольные приложения
+3. **Логирование** - используют тот же Logger, что и сервер
+4. **Обработка ошибок** - логируют ошибки и возвращают статус выхода
 
 ## Миграции
 
@@ -345,12 +427,21 @@ func TestUserUsecase_GetUser(t *testing.T) {
 
 ## Лучшие практики
 
+✅ **ПРАВИЛЬНО:**
 1. **Не смешивайте слои** - каждый слой должен знать только о нижележащих
 2. **Используйте интерфейсы** - для лучшей тестируемости
 3. **Держите контроллеры тонкими** - вся логика в use cases
 4. **Один use case = одна бизнес-операция**
 5. **Репозитории работают только с БД** - никакой бизнес-логики
 6. **Используйте транзакции** - для атомарных операций
+7. **Usecases работают ТОЛЬКО с Services** - никогда напрямую с Repositories
+8. **Services инкапсулируют Repositories** - используйте методы-обертки
+9. **Узко специализированные Services** - UserProfileService, OrderService и т.д.
+
+❌ **НЕПРАВИЛЬНО:**
+- Usecase напрямую использует Repository
+- Controller напрямую использует Repository
+- Repository содержит бизнес-логику
 
 ## Расширение проекта
 
@@ -359,15 +450,8 @@ func TestUserUsecase_GetUser(t *testing.T) {
 1. Создайте доменную модель в `domain/`
 2. Создайте миграцию
 3. Создайте репозиторий в `repositories/`
-4. Создайте use case в `usecases/`
-5. Создайте контроллер в `controllers/`
-6. Зарегистрируйте в `container/`
-7. Добавьте маршруты в `router/`
-
-### Добавление нового транспорта (gRPC, WebSocket):
-
-1. Создайте новый слой транспорта
-2. Используйте те же use cases
-3. Не дублируйте бизнес-логику
-
-Это позволяет легко поддерживать несколько транспортных протоколов одновременно.
+4. **Создайте сервис в `services/`** 
+5. Создайте use case в `usecases/`
+6. Создайте контроллер в `controllers/`
+7. Зарегистрируйте в `container/`:
+8. Добавьте маршруты в `router/`

@@ -16,16 +16,18 @@ paths:
     get:
       description: Проверяет доступность сервиса и подключение к базе данных
       produces:
-      - text/plain
+      - application/json
       responses:
         "200":
           description: OK
           schema:
-            type: string
+            additionalProperties: true
+            type: object
         "500":
-          description: Failed to connect DB
+          description: Service unhealthy
           schema:
-            type: string
+            additionalProperties: true
+            type: object
       summary: Проверка здоровья сервиса
       tags:
       - healthcheck

@@ -9,7 +9,7 @@
 ## ⚡ Быстрый старт (3 команды)
 
 ```bash
-cp config.example.yaml config.yaml
+cp cmd/server/config.example.yaml cmd/server/config.yaml
 make up-docker && sleep 3 && make migrate-up
 make up-server
 ```
@@ -22,7 +22,9 @@ make up-server
 - 💉 **Dependency Injection** - Uber Dig для управления зависимостями
 - 🌐 **Chi Router v5** - быстрый HTTP роутер с middleware
 - 🗄️ **PostgreSQL 17** - современная БД + sqlx + миграции
-- 📝 **Структурированное логирование** - zerolog
+- 🔄 **Транзакции в БД** - поддержка ACID с TransactionManager и примерами
+- 📝 **Структурированное логирование** - Uber Zap
+- 🐰 **RabbitMQ интеграция** - Producer/Consumer с поддержкой отложенных сообщений
 - 🔍 **Статический анализ** - кастомный multichecker с 20+ анализаторами
 - 🐳 **Docker Ready** - готовый docker-compose для разработки
 - 📚 **Примеры кода** - для каждого слоя архитектуры
@@ -57,14 +59,14 @@ cat internal/controllers/README.md
 
 ```bash
 # 1. Скопируйте шаблон
-cp -r thinker my-awesome-project
+cp -r go-base my-awesome-project
 cd my-awesome-project
 
 # 2. Переименуйте модуль
-# Замените в go.mod: github.com/SmirnovND/gobase → github.com/yourname/my-awesome-project
+# Замените в go.mod: github.com/SmirnovND/gobase → github.com/my-awesome-project
 
 # 3. Замените импорты во всех файлах
-find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/gobase|github.com/yourname/my-awesome-project|g' {} +
+find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/gobase|github.com/my-awesome-project|g' {} +
 
 # 4. Начинайте разработку!
 ```
@@ -77,6 +79,7 @@ find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/gobase|githu
 .
 ├── cmd/
 │   ├── server/             # Точка входа приложения
+│   ├── crons/              # Cron-скрипты и фоновые задачи
 │   └── staticlint/         # Кастомный multichecker для анализа кода
 ├── internal/
 │   ├── config/             # Конфигурация
@@ -121,21 +124,43 @@ HTTP Request
     ↓
 [Controller] ← обработка HTTP, валидация
     ↓
-[Usecase] ← бизнес-логика
+[Usecase] ← бизнес-логика, оркестрация сервисов
+    ↓
+[Services] ← инкапсуляция логики работы с БД и внешними системами
     ↓
 [Repository] ← работа с БД
     ↓
 [Database]
 ```
 
+**Ключевое правило:** Usecase работает **ТОЛЬКО** через Services!
+
 **Слои:**
 1. **Domain** - доменные модели (User, Product, etc.)
 2. **Repository** - работа с базой данных
-3. **Usecase** - бизнес-логика приложения
-4. **Service** - вспомогательные сервисы
-5. **Controller** - HTTP обработчики
+3. **Service** - инкапсуляция работы с данными и внешними системами
+4. **Usecase** - бизнес-логика приложения (работает через Services)
+5. **Controller** - HTTP обработчики (работают через Usecases)
 
 📖 **Подробнее:** [ARCHITECTURE.md](ARCHITECTURE.md)
+
+## 🔄 Cron-скрипты и фоновые задачи
+
+Проект поддерживает cron-скрипты через отдельные точки входа в `cmd/crons/`.
+
+**Структура:**
+```
+cmd/crons/
+├── example/               # Пример cron-скрипта
+│   └── main.go           # Пример использования DI контейнера
+```
+
+**Особенности:**
+- Используют тот же **DI контейнер**, что и основной сервер
+- Имеют доступ ко всем **Services, Repositories, Logger**
+- Могут быть запущены через cron, systemd или другие планировщики
+
+📖 **Подробнее:** [ARCHITECTURE.md](ARCHITECTURE.md#cron-скрипты)
 
 ## 📝 Добавление нового функционала
 
@@ -191,50 +216,108 @@ func NewProductRepository(db *sqlx.DB) ProductRepository {
 }
 ```
 
-### 4. Создайте usecase
+### 4. Создайте сервис
+
+```go
+// internal/services/product_service.go
+package services
+
+type ProductService struct {
+    repo repositories.ProductRepository
+}
+
+func NewProductService(repo repositories.ProductRepository) *ProductService {
+    return &ProductService{repo: repo}
+}
+
+// GetProduct - получить продукт по ID
+func (s *ProductService) GetProduct(ctx context.Context, id int64) (*domain.Product, error) {
+    return s.repo.GetByID(ctx, id)
+}
+
+// CreateProduct - создать продукт
+func (s *ProductService) CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error) {
+    product := &domain.Product{
+        Name: name,
+        Price: price,
+    }
+    return product, s.repo.Create(ctx, product)
+}
+```
+
+### 5. Создайте usecase
 
 ```go
 // internal/usecases/product_usecase.go
 package usecases
 
-type ProductUsecase interface {
-    CreateProduct(ctx context.Context, name string, price float64) error
+type ProductUsecase struct {
+    productService *services.ProductService
 }
 
-type productUsecase struct {
-    repo repositories.ProductRepository
+func NewProductUsecase(productService *services.ProductService) *ProductUsecase {
+    return &ProductUsecase{
+        productService: productService,
+    }
 }
 
-func NewProductUsecase(repo repositories.ProductRepository) ProductUsecase {
-    return &productUsecase{repo: repo}
+// CreateProduct - бизнес-логика создания продукта
+func (uc *ProductUsecase) CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error) {
+    // Через сервис, не напрямую через репозиторий!
+    return uc.productService.CreateProduct(ctx, name, price)
 }
 ```
 
-### 5. Создайте контроллер
+### 6. Создайте контроллер
 
 ```go
 // internal/controllers/product_controller.go
 package controllers
 
 type ProductController struct {
-    usecase usecases.ProductUsecase
+    productUsecase *usecases.ProductUsecase
 }
 
-func NewProductController(usecase usecases.ProductUsecase) *ProductController {
-    return &ProductController{usecase: usecase}
+func NewProductController(productUsecase *usecases.ProductUsecase) *ProductController {
+    return &ProductController{
+        productUsecase: productUsecase,
+    }
 }
 
 func (c *ProductController) Create(w http.ResponseWriter, r *http.Request) {
-    // Обработка запроса
+    // Обработка запроса и вызов use case
+    var req struct {
+        Name  string  `json:"name"`
+        Price float64 `json:"price"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request", http.StatusBadRequest)
+        return
+    }
+    
+    product, err := c.productUsecase.CreateProduct(r.Context(), req.Name, req.Price)
+    if err != nil {
+        http.Error(w, "Failed to create product", http.StatusInternalServerError)
+        return
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(product)
 }
 ```
 
-### 6. Зарегистрируйте в DI
+### 7. Зарегистрируйте в DI
 
 ```go
 // internal/container/container.go
 func (c *Container) RegisterRepositories() {
     c.container.Provide(repositories.NewProductRepository)
+}
+
+func (c *Container) RegisterServices() {
+    c.container.Provide(services.NewProductService)
 }
 
 func (c *Container) RegisterUsecases() {
@@ -246,7 +329,7 @@ func (c *Container) RegisterControllers() {
 }
 ```
 
-### 7. Добавьте маршрут
+### 8. Добавьте маршрут
 
 ```go
 // internal/router/router.go
@@ -261,9 +344,10 @@ r.Post("/api/products", productController.Create)
 |----------|----------|
 | [QUICKSTART.md](QUICKSTART.md) | Быстрый старт и примеры использования |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Подробное описание архитектуры |
+| [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md) | Использование ACID-транзакций в проекте |
+| [docs/RABBITMQ.md](docs/RABBITMQ.md) | Работа с RabbitMQ: Publisher/Consumer примеры |
 | [docs/SETUP_NEW_PROJECT.md](docs/SETUP_NEW_PROJECT.md) | Создание нового проекта из шаблона |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Стандарты разработки и code review |
-| [docs/CHANGELOG.md](docs/CHANGELOG.md) | История изменений |
 
 ## 🔍 Статический анализ кода
 
@@ -297,14 +381,12 @@ make lint
 - [Chi](https://github.com/go-chi/chi) - HTTP router
 - [sqlx](https://github.com/jmoiron/sqlx) - расширение для database/sql
 - [Uber Dig](https://github.com/uber-go/dig) - dependency injection
-- [zerolog](https://github.com/rs/zerolog) - логирование
+- [Uber Zap](https://github.com/uber-go/zap) - логирование
+- [AMQP](https://github.com/streadway/amqp) - клиент RabbitMQ
 - [golang-migrate](https://github.com/golang-migrate/migrate) - миграции
 - [staticcheck](https://staticcheck.io/) - статический анализ кода
 
 ## ❓ Частые вопросы
-
-**Q: Можно использовать без Docker?**  
-A: Да, запустите PostgreSQL локально и обновите `config.yaml`
 
 **Q: Как добавить новую таблицу?**  
 A: `make migrate-create name=add_products_table`
@@ -321,11 +403,3 @@ A: Смотрите [docs/SETUP_NEW_PROJECT.md](docs/SETUP_NEW_PROJECT.md)
 ## 🤝 Вклад в развитие
 
 Идеи и предложения приветствуются! Смотрите [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
-
-## 📄 Лицензия
-
-MIT - используйте свободно в любых проектах
-
----
-
-**Создано с ❤️ для Go сообщества**

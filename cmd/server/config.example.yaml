@@ -6,3 +6,7 @@ db:
 
 app:
   run_addr: "localhost:8080"
+
+rabbitmq:
+  # URL подключения к RabbitMQ (amqp://username:password@host:port/vhost)
+  url: "amqp://guest:guest@localhost:5672/"

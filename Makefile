@@ -12,17 +12,22 @@ help:
 	@$(TAB) make down-docker    - остановка Docker контейнеров
 	@$(TAB) make migrate-up     - применить все миграции
 	@$(TAB) make migrate-down   - откатить последнюю миграцию
-	@$(TAB) make migrate-create name=<имя> - создать новую миграцию
+	@$(TAB) make migrate-create name=\<имя\> - создать новую миграцию
 	@$(TAB) make lint           - запустить статический анализ кода
-	@$(TAB) make test           - запустить тесты
+	@$(TAB) make \test           - запустить тесты
 	@$(TAB) make deps           - установить зависимости
 	@$(TAB) make doc            - сгенерировать Swagger документацию
+	@$(TAB) make consumer-rmq   - запустить RabbitMQ consumer worker
 	@$(TAB) make clean          - очистить Docker volumes
 	@$(TAB) make help           - показать эту справку
 
 # Запуск сервера с конфигом
 up-server:
-	go run ./cmd/server/main.go config.yaml
+	go run ./cmd/server/main.go ./cmd/server/config.yaml
+
+# Запуск RabbitMQ consumer worker
+consumer-rmq:
+	go run ./cmd/crons/rabbitmq_consumer/main.go ./cmd/server/config.yaml
 
 # Запуск PostgreSQL в Docker
 up-docker:
@@ -74,4 +79,4 @@ doc:
 	@echo "Документация сгенерирована в ./docs"
 	@echo "После запуска сервера доступна по адресу: http://localhost:8080/swagger/index.html"
 
-.PHONY: help up-server up-docker down-docker clean migrate-up migrate-down migrate-create deps test lint doc
+.PHONY: help up-server consumer-rmq up-docker down-docker clean migrate-up migrate-down migrate-create deps test lint doc

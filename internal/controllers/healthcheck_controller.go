@@ -1,17 +1,18 @@
 package controllers
 
 import (
-	"github.com/jmoiron/sqlx"
+	"encoding/json"
+	"github.com/SmirnovND/gobase/internal/services"
 	"net/http"
 )
 
 type HealthcheckController struct {
-	DB *sqlx.DB
+	healthcheckService *services.HealthcheckService
 }
 
-func NewHealthcheckController(DB *sqlx.DB) *HealthcheckController {
+func NewHealthcheckController(healthcheckService *services.HealthcheckService) *HealthcheckController {
 	return &HealthcheckController{
-		DB: DB,
+		healthcheckService: healthcheckService,
 	}
 }
 
@@ -19,15 +20,24 @@ func NewHealthcheckController(DB *sqlx.DB) *HealthcheckController {
 // @Summary      Проверка здоровья сервиса
 // @Description  Проверяет доступность сервиса и подключение к базе данных
 // @Tags         healthcheck
-// @Produce      plain
-// @Success      200  {string}  string  "OK"
-// @Failure      500  {string}  string  "Failed to connect DB"
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}  "OK"
+// @Failure      500  {object}  map[string]interface{}  "Service unhealthy"
 // @Router       /ping [get]
 func (hc *HealthcheckController) HandlePing(w http.ResponseWriter, r *http.Request) {
-	err := hc.DB.PingContext(r.Context())
+	status, err := hc.healthcheckService.Check(r.Context())
+
+	w.Header().Set("Content-Type", "application/json")
+
 	if err != nil {
-		http.Error(w, "Failed to connect DB", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "error",
+			"error":  err.Error(),
+		})
 		return
 	}
+
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(status)
 }

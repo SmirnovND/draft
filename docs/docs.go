@@ -27,7 +27,7 @@ const docTemplate = `{
             "get": {
                 "description": "Проверяет доступность сервиса и подключение к базе данных",
                 "produces": [
-                    "text/plain"
+                    "application/json"
                 ],
                 "tags": [
                     "healthcheck"
@@ -37,13 +37,15 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "500": {
-                        "description": "Failed to connect DB",
+                        "description": "Service unhealthy",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }

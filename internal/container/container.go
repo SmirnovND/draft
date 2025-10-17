@@ -4,11 +4,15 @@ import (
 	config "github.com/SmirnovND/gobase/internal/config/server"
 	"github.com/SmirnovND/gobase/internal/controllers"
 	"github.com/SmirnovND/gobase/internal/interfaces"
+	"github.com/SmirnovND/gobase/internal/repositories"
+	"github.com/SmirnovND/gobase/internal/services"
 	"github.com/SmirnovND/toolbox/pkg/db"
 	"github.com/SmirnovND/toolbox/pkg/http"
+	"github.com/SmirnovND/toolbox/pkg/rabbitmq"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"go.uber.org/dig"
+	"go.uber.org/zap"
 )
 
 // Container - структура контейнера, обертывающая dig-контейнер
@@ -29,33 +33,50 @@ func NewContainer() *Container {
 // provideDependencies - функция, регистрирующая зависимости
 func (c *Container) provideDependencies() {
 	// Регистрируем конфигурацию
-	c.container.Provide(config.NewConfig())
+	c.container.Provide(config.NewConfig)
 	c.container.Provide(func(configServer interfaces.ConfigServer) *sqlx.DB {
 		return db.NewDB(configServer.GetDBDsn())
 	})
 	c.container.Provide(db.NewTransactionManager)
 	c.container.Provide(http.NewAPIClient)
+	c.container.Provide(func() *zap.Logger {
+		logger, _ := zap.NewProduction()
+		return logger
+	})
+
+	// Регистрируем RabbitMQ компоненты
+	c.container.Provide(func(configServer interfaces.ConfigServer) *rabbitmq.RabbitMQConnection {
+		return rabbitmq.NewRabbitMQConnection(configServer.GetRabbitMQURL())
+	})
+
+	c.container.Provide(func(conn *rabbitmq.RabbitMQConnection) *rabbitmq.RabbitMQProducer {
+		return rabbitmq.NewRabbitMQProducer(conn.Conn)
+	})
+
+	c.container.Provide(func(conn *rabbitmq.RabbitMQConnection) *rabbitmq.RabbitMQConsumer {
+		// Используется стандартное имя очереди "default_queue"
+		// Для специфичных очередей создавайте отдельные consumer в сервисах
+		return rabbitmq.NewRabbitMQConsumer(conn.Conn, "default_queue")
+	})
 }
 
 // provideUsecase - регистрация use case слоя
 func (c *Container) provideUsecase() {
-	// Пример: c.container.Provide(usecase.NewUserUsecase)
 }
 
 // provideRepo - регистрация репозиториев
 func (c *Container) provideRepo() {
-	// Пример: c.container.Provide(repository.NewUserRepository)
+	c.container.Provide(repositories.NewHealthcheckRepository)
 }
 
 // provideService - регистрация сервисов
 func (c *Container) provideService() {
-	// Пример: c.container.Provide(service.NewEmailService)
+	c.container.Provide(services.NewHealthcheckService)
 }
 
 // provideController - регистрация контроллеров
 func (c *Container) provideController() {
 	c.container.Provide(controllers.NewHealthcheckController)
-	// Пример: c.container.Provide(controllers.NewUserController)
 }
 
 // Invoke - функция для вызова и инжекта зависимостей

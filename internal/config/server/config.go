@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Db  `yaml:"db"`
-	App `yaml:"app"`
+	Db       `yaml:"db"`
+	App      `yaml:"app"`
+	RabbitMQ `yaml:"rabbitmq"`
 }
 
 type Db struct {
@@ -20,6 +21,10 @@ type App struct {
 	RunAddr string `yaml:"run_addr"`
 }
 
+type RabbitMQ struct {
+	URL string `yaml:"url"`
+}
+
 func (c *Config) GetDBDsn() string {
 	return c.Db.Dsn
 }
@@ -28,12 +33,14 @@ func (c *Config) GetRunAddr() string {
 	return c.App.RunAddr
 }
 
+func (c *Config) GetRabbitMQURL() string {
+	return c.RabbitMQ.URL
+}
+
 func NewConfig() interfaces.ConfigServer {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Println(err)
-		}
-	}()
+	if len(os.Args) < 2 {
+		log.Fatal("Config file path not provided. Usage: ./server <config.yaml>")
+	}
 
 	cPath := os.Args[1]
 	cf := &Config{}

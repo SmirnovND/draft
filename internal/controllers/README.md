@@ -1,6 +1,12 @@
 # Controllers
 
-Слой HTTP-контроллеров для обработки запросов.
+Слой HTTP-контроллеров для обработки запросов и передачи данных в use cases.
+
+**Ответственность контроллера:**
+- Парсинг и валидация HTTP запросов
+- Вызов use cases
+- Преобразование результатов в HTTP ответы
+- Установка правильных HTTP статус-кодов
 
 ## Пример контроллера
 
@@ -16,7 +22,7 @@ import (
 )
 
 type UserController struct {
-	userUsecase *usecases.UserUsecase
+	userUsecase *usecases.UserUsecase  // ✅ Use Case, не Service или Repository!
 }
 
 func NewUserController(userUsecase *usecases.UserUsecase) *UserController {
@@ -33,6 +39,7 @@ func (c *UserController) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Используем use case для получения пользователя
 	user, err := c.userUsecase.GetUser(r.Context(), id)
 	if err != nil {
 		http.Error(w, "User not found", http.StatusNotFound)
@@ -54,6 +61,7 @@ func (c *UserController) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Используем use case для создания пользователя
 	user, err := c.userUsecase.CreateUser(r.Context(), req.Name, req.Email)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)

@@ -16,7 +16,7 @@
 
 ```bash
 # Создайте конфигурацию
-cp config.example.yaml config.yaml
+cp cmd/server/config.example.yaml cmd/server/config.yaml
 
 # Запустите PostgreSQL
 make up-docker
@@ -474,7 +474,7 @@ curl -X DELETE http://localhost:8080/api/products/1
 docker-compose logs -f postgres
 
 # Подключение к PostgreSQL
-docker exec -it thinker-postgres-1 psql -U developer -d gobase
+docker exec -it go-base-postgres-1 psql -U developer -d gobase
 
 # Остановка всех сервисов
 make down-docker
