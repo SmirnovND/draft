@@ -2,16 +2,16 @@ package controllers
 
 import (
 	"encoding/json"
-	"github.com/SmirnovND/gobase/internal/services"
+	"github.com/SmirnovND/gobase/internal/interfaces"
 	"net/http"
 )
 
-type HealthcheckController struct {
-	healthcheckService *services.HealthcheckService
+type healthcheckController struct {
+	healthcheckService interfaces.HealthcheckService
 }
 
-func NewHealthcheckController(healthcheckService *services.HealthcheckService) *HealthcheckController {
-	return &HealthcheckController{
+func NewHealthcheckController(healthcheckService interfaces.HealthcheckService) interfaces.HealthcheckController {
+	return &healthcheckController{
 		healthcheckService: healthcheckService,
 	}
 }
@@ -24,7 +24,7 @@ func NewHealthcheckController(healthcheckService *services.HealthcheckService) *
 // @Success      200  {object}  map[string]interface{}  "OK"
 // @Failure      500  {object}  map[string]interface{}  "Service unhealthy"
 // @Router       /ping [get]
-func (hc *HealthcheckController) HandlePing(w http.ResponseWriter, r *http.Request) {
+func (hc *healthcheckController) HandlePing(w http.ResponseWriter, r *http.Request) {
 	status, err := hc.healthcheckService.Check(r.Context())
 
 	w.Header().Set("Content-Type", "application/json")

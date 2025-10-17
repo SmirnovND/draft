@@ -3,7 +3,6 @@ package router
 import (
 	"fmt"
 	"github.com/SmirnovND/gobase/internal/container"
-	"github.com/SmirnovND/gobase/internal/controllers"
 	"github.com/SmirnovND/gobase/internal/interfaces"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -13,13 +12,13 @@ import (
 )
 
 func Handler(diContainer *container.Container) http.Handler {
-	var HealthcheckController *controllers.HealthcheckController
+	var healthcheckController interfaces.HealthcheckController
 	err := diContainer.Invoke(func(
 		d *sqlx.DB,
 		c interfaces.ConfigServer,
-		healthcheckControl *controllers.HealthcheckController,
+		ctrl interfaces.HealthcheckController,
 	) {
-		HealthcheckController = healthcheckControl
+		healthcheckController = ctrl
 	})
 	if err != nil {
 		fmt.Println(err)
@@ -29,7 +28,7 @@ func Handler(diContainer *container.Container) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
 
-	r.Get("/ping", HealthcheckController.HandlePing)
+	r.Get("/ping", healthcheckController.HandlePing)
 
 	// Swagger UI
 	r.Get("/swagger/*", httpSwagger.WrapHandler)

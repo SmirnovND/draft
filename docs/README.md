@@ -35,8 +35,10 @@
 **Я хочу...**
 
 - **...начать работу** → [README.md](../README.md) → [QUICKSTART.md](../QUICKSTART.md)
-- **...создать новый проект** → [SETUP_NEW_PROJECT.md](SETUP_NEW_PROJECT.md)
 - **...понять архитектуру** → [ARCHITECTURE.md](../ARCHITECTURE.md)
-- **...добавить HTTP функционал** → [QUICKSTART.md](../QUICKSTART.md#добавление-нового-функционала)
+- **...добавить новую фичу** → [INTERFACES_AND_DI.md](INTERFACES_AND_DI.md#пошаговое-создание-новой-фичи)
+- **...создать новый проект** → [SETUP_NEW_PROJECT.md](SETUP_NEW_PROJECT.md)
+- **...добавить HTTP функционал** → [README.md](../README.md#-добавление-нового-функционала)
+- **...написать тесты** → [ARCHITECTURE.md](../ARCHITECTURE.md#тестирование)
 - **...создать cron-скрипт** → [ARCHITECTURE.md](../ARCHITECTURE.md#cron-скрипты)
 - **...внести вклад** → [CONTRIBUTING.md](CONTRIBUTING.md)

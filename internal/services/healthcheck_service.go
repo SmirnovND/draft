@@ -2,21 +2,21 @@ package services
 
 import (
 	"context"
-	"github.com/SmirnovND/gobase/internal/repositories"
+	"github.com/SmirnovND/gobase/internal/interfaces"
 )
 
-type HealthcheckService struct {
-	healthRepo repositories.HealthcheckRepository
+type healthcheckService struct {
+	healthRepo interfaces.HealthcheckRepository
 }
 
-func NewHealthcheckService(healthRepo repositories.HealthcheckRepository) *HealthcheckService {
-	return &HealthcheckService{
+func NewHealthcheckService(healthRepo interfaces.HealthcheckRepository) interfaces.HealthcheckService {
+	return &healthcheckService{
 		healthRepo: healthRepo,
 	}
 }
 
 // Check проверяет здоровье сервиса и базы данных
-func (s *HealthcheckService) Check(ctx context.Context) (map[string]interface{}, error) {
+func (s *healthcheckService) Check(ctx context.Context) (map[string]interface{}, error) {
 	err := s.healthRepo.Ping(ctx)
 	if err != nil {
 		return nil, err

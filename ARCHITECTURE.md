@@ -4,6 +4,8 @@
 
 Проект построен на принципах **Clean Architecture** с использованием **Dependency Injection** через Uber Dig.
 
+**Ключевой принцип:** Каждый слой зависит от **интерфейсов** более низких слоёв, а не от конкретных реализаций. Это обеспечивает слабую связанность и высокую тестируемость.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     HTTP Layer                          │
@@ -14,22 +16,23 @@
 │                   Controllers                           │
 │          (Обработка HTTP запросов/ответов)             │
 └────────────────────┬────────────────────────────────────┘
-                     │
+                     │ (использует interfaces.*)
 ┌────────────────────▼────────────────────────────────────┐
 │                   Use Cases                             │
 │              (Бизнес-логика приложения)                 │
 │          (Орхестрирует работу сервисов)                 │
 └────────────────────┬────────────────────────────────────┘
-                     │
+                     │ (использует interfaces.*)
 ┌────────────────────▼────────────────────────────────────┐
 │                   Services                              │
-│  (Domain Services + External Services + Some Services)                  │
+│  (Domain Services + External Services + Some Services)  │
 │  - Инкапсулируют работу с Repositories                  │
 │  - Интеграция с внешними системами                      │
 └────────────┬───────────────────────┬────────────────────┘
-             │                       │
+             │ (использует interfaces.*)
 ┌────────────▼────────────┐ ┌───────▼────────────────────┐
 │      Repositories       │ │  Other Service         │
+│ реализуют interfaces.*  │ │  (Email, SMS, API)         │
 │  (Работа с БД)          │ │  (Email, SMS, API)         │
 └────────────┬────────────┘ └────────────────────────────┘
              │
@@ -39,7 +42,11 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Ключевое правило:** Use Cases работают **только** через Services, никогда напрямую через Repositories!
+**Ключевые правила:**
+1. 🔗 Use Cases работают **только** через Services (не напрямую через Repositories!)
+2. 🎯 Controllers зависят от **интерфейсов** Services, не от конкретных реализаций
+3. 💉 Services зависят от **интерфейсов** Repositories, не от конкретных реализаций
+4. 🧪 Благодаря интерфейсам легко создавать моки для тестирования
 
 ## Слои приложения
 
@@ -70,11 +77,34 @@ type User struct {
 - Инкапсулирует SQL-запросы
 - Возвращает доменные модели
 - Использует sqlx для работы с БД
+- **Реализует интерфейсы из `internal/interfaces/repository.go`**
 
 **Ответственность:**
 - CRUD операции
 - Сложные запросы
 - Транзакции
+
+**Пример структуры:**
+```go
+// internal/interfaces/repository.go
+type HealthcheckRepository interface {
+    Ping(ctx context.Context) error
+}
+
+// internal/repositories/healthcheck_repository.go
+type healthcheckRepository struct {
+    db *sqlx.DB
+}
+
+// Конструктор возвращает интерфейс, не конкретный тип
+func NewHealthcheckRepository(db *sqlx.DB) interfaces.HealthcheckRepository {
+    return &healthcheckRepository{db: db}
+}
+
+func (r *healthcheckRepository) Ping(ctx context.Context) error {
+    return r.db.PingContext(ctx)
+}
+```
 
 ### 3. Service Layer (`internal/services/`)
 
@@ -86,22 +116,41 @@ type User struct {
 - Переиспользуются в разных Use Cases
 - Могут содержать простую бизнес-логику
 - Сервис может загружать в себя другой сервис
+- **Зависят от интерфейсов Repositories (`interfaces.HealthcheckRepository`)**
+- **Реализуют интерфейсы из `internal/interfaces/service.go`**
 
 **Пример Service:**
 ```go
-type UserProfileService struct {
-    userRepo *repositories.UserRepository
+// internal/interfaces/service.go
+type HealthcheckService interface {
+    Check(ctx context.Context) (map[string]interface{}, error)
 }
 
-func (s *UserProfileService) GetUser(ctx context.Context, id int64) (*domain.User, error) {
-    return s.userRepo.GetByID(ctx, id)
+// internal/services/healthcheck_service.go
+type healthcheckService struct {
+    healthRepo interfaces.HealthcheckRepository  // ← зависит от интерфейса!
 }
 
-func (s *UserProfileService) CreateUser(ctx context.Context, name, email string) (*domain.User, error) {
-    user := &domain.User{Name: name, Email: email}
-    return user, s.userRepo.Create(ctx, user)
+// Конструктор возвращает интерфейс, не конкретный тип
+func NewHealthcheckService(healthRepo interfaces.HealthcheckRepository) interfaces.HealthcheckService {
+    return &healthcheckService{
+        healthRepo: healthRepo,
+    }
+}
+
+func (s *healthcheckService) Check(ctx context.Context) (map[string]interface{}, error) {
+    err := s.healthRepo.Ping(ctx)
+    if err != nil {
+        return nil, err
+    }
+    return map[string]interface{}{"status": "ok"}, nil
 }
 ```
+
+**Преимущества использования интерфейсов:**
+- ✅ Можно подменить репозиторий на мок при тестировании
+- ✅ Можно подменить на другую реализацию без изменения сервиса
+- ✅ Легко понять зависимости (просто смотрим параметры конструктора)
 
 ### 4. Use Case Layer (`internal/usecases/`)
 
@@ -150,13 +199,52 @@ type UserUsecase struct {
 **Характеристики:**
 - Парсинг входных данных
 - Валидация запросов
-- Вызов use cases
+- Вызов use cases/сервисов
 - Формирование HTTP ответов
+- **Зависят от интерфейсов Services (`interfaces.HealthcheckService`)**
+- **Реализуют интерфейсы из `internal/interfaces/controller.go`**
 
 **Ответственность:**
 - HTTP статус коды
 - Сериализация/десериализация JSON
 - Обработка ошибок на уровне HTTP
+
+**Пример Controller:**
+```go
+// internal/interfaces/controller.go
+type HealthcheckController interface {
+    HandlePing(w http.ResponseWriter, r *http.Request)
+}
+
+// internal/controllers/healthcheck_controller.go
+type healthcheckController struct {
+    healthcheckService interfaces.HealthcheckService  // ← зависит от интерфейса!
+}
+
+// Конструктор возвращает интерфейс, не конкретный тип
+func NewHealthcheckController(healthcheckService interfaces.HealthcheckService) interfaces.HealthcheckController {
+    return &healthcheckController{
+        healthcheckService: healthcheckService,
+    }
+}
+
+func (hc *healthcheckController) HandlePing(w http.ResponseWriter, r *http.Request) {
+    status, err := hc.healthcheckService.Check(r.Context())
+    w.Header().Set("Content-Type", "application/json")
+    
+    if err != nil {
+        w.WriteHeader(http.StatusInternalServerError)
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "status": "error",
+            "error":  err.Error(),
+        })
+        return
+    }
+    
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(status)
+}
+```
 
 ### 6. Router Layer (`internal/router/`)
 
@@ -185,65 +273,116 @@ type UserUsecase struct {
 - Автоматическое разрешение зависимостей
 - Управление жизненным циклом объектов
 
-## Dependency Injection
+## Dependency Injection через Uber Dig
 
-Проект использует **Uber Dig** для управления зависимостями.
+Проект использует **Uber Dig** для управления зависимостями с акцентом на **интерфейсы**.
 
-### Принципы:
+### Ключевые принципы:
 
-1. **Инверсия зависимостей** - зависимости передаются извне
-2. **Единственная ответственность** - каждый компонент делает одну вещь
-3. **Тестируемость** - легко подменить зависимости в тестах
+1. **Инверсия зависимостей** - зависимости передаются через интерфейсы, а не конкретные типы
+2. **Слабая связанность** - каждый компонент зависит от интерфейсов, а не реализаций
+3. **Тестируемость** - легко подменить зависимости мокированными интерфейсами
+4. **Автоматическое разрешение** - Dig анализирует сигнатуру функций и находит нужные зависимости
+
+### Как работает Dig с интерфейсами:
+
+```
+┌─ Конструктор функции ────────────────────────────────────┐
+│                                                           │
+│  func NewHealthcheckService(                              │
+│      repo interfaces.HealthcheckRepository  ← нужен       │
+│  ) interfaces.HealthcheckService {           ← возвращает │
+│      return &healthcheckService{repo: repo}              │
+│  }                                                        │
+│                                                           │
+│  Dig анализирует параметры ↓                              │
+│  "Мне нужен interfaces.HealthcheckRepository"             │
+│                                                           │
+│  Dig ищет в контейнере ↓                                 │
+│  "Кто создаёт interfaces.HealthcheckRepository?"          │
+│  → repositories.NewHealthcheckRepository                  │
+│                                                           │
+│  Dig вызывает нужные конструкторы по порядку:             │
+│  1. NewHealthcheckRepository(db)                          │
+│  2. NewHealthcheckService(repo)                           │
+│                                                           │
+│  Результат: interfaces.HealthcheckService зарегистрирован │
+└───────────────────────────────────────────────────────────┘
+```
 
 ### Регистрация зависимостей:
 
 ```go
-// В container.go
+// internal/container/container.go
 func (c *Container) provideDependencies() {
-    // 1. Базовые зависимости
-    c.container.Provide(config.NewConfig())
-    c.container.Provide(db.NewDB)
+    // 1. Базовые зависимости (конкретные типы)
+    c.container.Provide(config.NewConfig)           // → interfaces.ConfigServer
+    c.container.Provide(db.NewDB)                   // → *sqlx.DB
 }
 
-func (c *Container) provideRepositories() {
-    // 2. Репозитории (работают с БД)
-    c.container.Provide(repositories.NewUserRepository)
+func (c *Container) provideRepo() {
+    // 2. Репозитории (зарегистрируются как интерфейсы!)
+    // NewHealthcheckRepository(db *sqlx.DB) → interfaces.HealthcheckRepository
     c.container.Provide(repositories.NewHealthcheckRepository)
 }
 
-func (c *Container) provideServices() {
-    // 3. Сервисы (работают с репозиториями)
-    c.container.Provide(services.NewUserProfileService)
+func (c *Container) provideService() {
+    // 3. Сервисы (работают через интерфейсы репозиториев!)
+    // NewHealthcheckService(repo interfaces.HealthcheckRepository) → interfaces.HealthcheckService
     c.container.Provide(services.NewHealthcheckService)
-    c.container.Provide(services.NewEmailService)
 }
 
-func (c *Container) provideUsecases() {
-    // 4. Usecases (работают с сервисами, не с репозиториями!)
-    c.container.Provide(usecases.NewUserUsecase)
-}
-
-func (c *Container) provideControllers() {
-    // 5. Контроллеры (работают с usecases)
-    c.container.Provide(controllers.NewUserController)
+func (c *Container) provideController() {
+    // 4. Контроллеры (работают через интерфейсы сервисов!)
+    // NewHealthcheckController(svc interfaces.HealthcheckService) → interfaces.HealthcheckController
     c.container.Provide(controllers.NewHealthcheckController)
 }
 ```
 
-**Зависимости:**
-- Controllers → Usecases
-- Usecases → Services
-- Services → Repositories
-- Repositories → Database
+**Порядок вызова при Invoke:**
+
+Когда вызываем `c.Invoke()` для получения контроллера:
+```
+1. Dig ищет interfaces.HealthcheckController
+2. Находит NewHealthcheckController
+3. NewHealthcheckController нужен interfaces.HealthcheckService
+4. Находит NewHealthcheckService
+5. NewHealthcheckService нужен interfaces.HealthcheckRepository
+6. Находит NewHealthcheckRepository
+7. NewHealthcheckRepository нужен *sqlx.DB
+8. Находит провайдер БД
+9. Рекурсивно вызывает все конструкторы в правильном порядке
+10. Возвращает полностью инициализированный interfaces.HealthcheckController
+```
 
 ### Использование:
 
 ```go
-// Dig автоматически разрешит все зависимости
-var userController *controllers.UserController
-diContainer.Invoke(func(uc *controllers.UserController) {
-    userController = uc
+// Router получает контроллер из DI контейнера
+var healthcheckController interfaces.HealthcheckController
+err := diContainer.Invoke(func(
+    ctrl interfaces.HealthcheckController,  // ← Dig автоматически разрешит все зависимости
+) {
+    healthcheckController = ctrl
 })
+
+// Dig сам построит цепочку:
+// *sqlx.DB → interfaces.HealthcheckRepository → interfaces.HealthcheckService → interfaces.HealthcheckController
+```
+
+### Для сложных сервисов с кастомной логикой:
+
+```go
+// Если нужна специальная логика инициализации
+func (c *Container) provideService() {
+    c.container.Provide(func(
+        minioCfg interfaces.ConfigServer,  // ← Dig разрешит зависимости
+        repo interfaces.HealthcheckRepository,
+    ) interfaces.CloudService {
+        // Кастомная инициализация
+        return service.NewCloud(minioCfg, repo)
+    })
+}
 ```
 
 ## Поток данных
@@ -398,60 +537,335 @@ func (c *UserController) GetUser(w http.ResponseWriter, r *http.Request) {
 
 ## Тестирование
 
-### Unit тесты:
+**Ключевое преимущество архитектуры с интерфейсами:** вы легко можете подменять зависимости на моки!
+
+### Unit тесты сервисов:
 
 ```go
-// Мокируем зависимости
-type MockUserRepository struct {
-    mock.Mock
+// Пример 1: Простой мок с функциями (самый простой способ)
+func TestHealthcheckService(t *testing.T) {
+    // Мокируем репозиторий
+    mockRepo := &interfaces.MockHealthcheckRepository{
+        PingFunc: func(ctx context.Context) error {
+            return nil  // Успешно
+        },
+    }
+    
+    // Создаём сервис с мокированным репозиторием
+    service := services.NewHealthcheckService(mockRepo)
+    
+    // Тестируем
+    status, err := service.Check(context.Background())
+    
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+    
+    if status["status"] != "ok" {
+        t.Errorf("expected status 'ok', got %v", status["status"])
+    }
 }
 
-func (m *MockUserRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
-    args := m.Called(ctx, id)
-    return args.Get(0).(*domain.User), args.Error(1)
-}
-
-// Тестируем use case
-func TestUserUsecase_GetUser(t *testing.T) {
-    mockRepo := new(MockUserRepository)
-    usecase := usecases.NewUserUsecase(mockRepo)
+// Пример 2: Тест с ошибкой
+func TestHealthcheckService_WithError(t *testing.T) {
+    mockRepo := &interfaces.MockHealthcheckRepository{
+        PingFunc: func(ctx context.Context) error {
+            return errors.New("connection failed")
+        },
+    }
     
-    ctx := context.Background()
-    mockRepo.On("GetByID", ctx, int64(1)).Return(&domain.User{ID: 1}, nil)
+    service := services.NewHealthcheckService(mockRepo)
+    _, err := service.Check(context.Background())
     
-    user, err := usecase.GetUser(ctx, 1)
-    assert.NoError(t, err)
-    assert.Equal(t, int64(1), user.ID)
+    if err == nil {
+        t.Fatal("expected error, got nil")
+    }
 }
 ```
 
+**Заметьте:** никаких фреймворков для моков не нужно! Просто используйте встроенные моки из `interfaces/mocks.go`
+
+### Unit тесты контроллеров:
+
+```go
+func TestHealthcheckController(t *testing.T) {
+    // Мокируем сервис
+    mockService := &interfaces.MockHealthcheckService{
+        CheckFunc: func(ctx context.Context) (map[string]interface{}, error) {
+            return map[string]interface{}{"status": "ok"}, nil
+        },
+    }
+    
+    // Создаём контроллер с мокированным сервисом
+    controller := controllers.NewHealthcheckController(mockService)
+    
+    // Тестируем HTTP обработчик
+    req := httptest.NewRequest("GET", "/ping", nil)
+    w := httptest.NewRecorder()
+    
+    controller.HandlePing(w, req)
+    
+    if w.Code != http.StatusOK {
+        t.Errorf("expected status 200, got %d", w.Code)
+    }
+    
+    var result map[string]interface{}
+    json.NewDecoder(w.Body).Decode(&result)
+    
+    if result["status"] != "ok" {
+        t.Errorf("expected status 'ok', got %v", result["status"])
+    }
+}
+```
+
+### Интеграционные тесты с реальным DI контейнером:
+
+```go
+func TestIntegration_HealthcheckFlow(t *testing.T) {
+    // Используем реальный контейнер с реальной БД
+    container := container.NewContainer()
+    
+    var controller interfaces.HealthcheckController
+    err := container.Invoke(func(ctrl interfaces.HealthcheckController) {
+        controller = ctrl
+    })
+    
+    if err != nil {
+        t.Fatalf("failed to invoke controller: %v", err)
+    }
+    
+    // Тестируем полный цепочку
+    req := httptest.NewRequest("GET", "/ping", nil)
+    w := httptest.NewRecorder()
+    
+    controller.HandlePing(w, req)
+    
+    if w.Code != http.StatusOK {
+        t.Errorf("expected status 200, got %d", w.Code)
+    }
+}
+```
+
+### Лучшие практики для тестирования:
+
+1. **Unit тесты** - используйте моки для быстрого тестирования логики
+2. **Интеграционные тесты** - используйте реальный контейнер для тестирования цепочки
+3. **Мокируйте только то, что нужно** - если можно использовать реальный объект, используйте его
+4. **Тесты находятся рядом с кодом** - `service_test.go` рядом с `service.go`
+
 ## Лучшие практики
 
-✅ **ПРАВИЛЬНО:**
-1. **Не смешивайте слои** - каждый слой должен знать только о нижележащих
-2. **Используйте интерфейсы** - для лучшей тестируемости
-3. **Держите контроллеры тонкими** - вся логика в use cases
-4. **Один use case = одна бизнес-операция**
-5. **Репозитории работают только с БД** - никакой бизнес-логики
-6. **Используйте транзакции** - для атомарных операций
-7. **Usecases работают ТОЛЬКО с Services** - никогда напрямую с Repositories
-8. **Services инкапсулируют Repositories** - используйте методы-обертки
-9. **Узко специализированные Services** - UserProfileService, OrderService и т.д.
+### ✅ **ПРАВИЛЬНО:**
 
-❌ **НЕПРАВИЛЬНО:**
-- Usecase напрямую использует Repository
-- Controller напрямую использует Repository
-- Repository содержит бизнес-логику
+1. **Зависимости через интерфейсы** - всегда передавайте интерфейсы, не конкретные типы
+   ```go
+   // ✅ ПРАВИЛЬНО
+   func NewService(repo interfaces.Repository) interfaces.Service {
+       return &service{repo: repo}
+   }
+   
+   // ❌ НЕПРАВИЛЬНО
+   func NewService(repo *repositories.UserRepository) *userService {
+       return &userService{repo: repo}
+   }
+   ```
+
+2. **Конструкторы возвращают интерфейсы**
+   ```go
+   // ✅ ПРАВИЛЬНО - возвращаем интерфейс
+   func NewHealthcheckService(repo interfaces.HealthcheckRepository) interfaces.HealthcheckService
+   
+   // ❌ НЕПРАВИЛЬНО - возвращаем конкретный тип
+   func NewHealthcheckService(repo interfaces.HealthcheckRepository) *healthcheckService
+   ```
+
+3. **Структуры приватные** - только интерфейсы публичные
+   ```go
+   // ✅ ПРАВИЛЬНО
+   type healthcheckService struct { ... }  // приватная
+   func NewHealthcheckService(...) interfaces.HealthcheckService  // публичный конструктор
+   
+   // ❌ НЕПРАВИЛЬНО
+   type HealthcheckService struct { ... }  // публичная структура
+   ```
+
+4. **Слои знают только о нижележащих** через интерфейсы
+   ```
+   Controllers → interfaces.Services
+   Services → interfaces.Repositories
+   Repositories → Database
+   ```
+
+5. **Usecases работают ТОЛЬКО с Services** - никогда напрямую с Repositories
+6. **Services инкапсулируют Repositories** - используйте методы-обертки
+7. **Узко специализированные Services** - HealthcheckService, UserProfileService, и т.д.
+8. **Одна ответственность** - каждый сервис делает одно
+9. **Используйте транзакции** - для атомарных операций
+
+### ❌ **НЕПРАВИЛЬНО:**
+
+- ❌ Controller напрямую работает с Repository (нарушает слои)
+- ❌ Usecase напрямую использует Repository (должен через Service)
+- ❌ Зависимости от конкретных типов вместо интерфейсов
+- ❌ Публичные структуры вместо интерфейсов
+- ❌ Repository содержит бизнес-логику
 
 ## Расширение проекта
 
-### Добавление нового функционала:
+### Пошаговое добавление нового функционала (например, UserService):
 
-1. Создайте доменную модель в `domain/`
-2. Создайте миграцию
-3. Создайте репозиторий в `repositories/`
-4. **Создайте сервис в `services/`** 
-5. Создайте use case в `usecases/`
-6. Создайте контроллер в `controllers/`
-7. Зарегистрируйте в `container/`:
-8. Добавьте маршруты в `router/`
+#### 1. Добавьте интерфейсы в `internal/interfaces/`
+
+```go
+// internal/interfaces/repository.go (добавьте)
+type UserRepository interface {
+    GetByID(ctx context.Context, id int64) (*domain.User, error)
+    Create(ctx context.Context, user *domain.User) error
+}
+
+// internal/interfaces/service.go (добавьте)
+type UserService interface {
+    GetUser(ctx context.Context, id int64) (*domain.User, error)
+    CreateUser(ctx context.Context, name string) (*domain.User, error)
+}
+
+// internal/interfaces/controller.go (добавьте)
+type UserController interface {
+    GetUser(w http.ResponseWriter, r *http.Request)
+    CreateUser(w http.ResponseWriter, r *http.Request)
+}
+```
+
+#### 2. Создайте доменную модель в `domain/`
+
+```go
+// internal/domain/user.go
+package domain
+
+type User struct {
+    ID        int64  `db:"id"`
+    Name      string `db:"name"`
+    CreatedAt string `db:"created_at"`
+}
+```
+
+#### 3. Создайте миграцию
+
+```bash
+make migrate-create name=create_users_table
+```
+
+#### 4. Создайте репозиторий в `repositories/`
+
+```go
+// internal/repositories/user_repository.go
+package repositories
+
+type userRepository struct {
+    db *sqlx.DB
+}
+
+// ✅ Возвращаем интерфейс!
+func NewUserRepository(db *sqlx.DB) interfaces.UserRepository {
+    return &userRepository{db: db}
+}
+
+func (r *userRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+    var user domain.User
+    // ... SQL запрос
+    return &user, nil
+}
+```
+
+#### 5. Создайте сервис в `services/`
+
+```go
+// internal/services/user_service.go
+package services
+
+type userService struct {
+    userRepo interfaces.UserRepository  // ← интерфейс!
+}
+
+// ✅ Зависит от интерфейса репозитория, возвращаем интерфейс!
+func NewUserService(userRepo interfaces.UserRepository) interfaces.UserService {
+    return &userService{userRepo: userRepo}
+}
+
+func (s *userService) GetUser(ctx context.Context, id int64) (*domain.User, error) {
+    return s.userRepo.GetByID(ctx, id)
+}
+```
+
+#### 6. Создайте контроллер в `controllers/`
+
+```go
+// internal/controllers/user_controller.go
+package controllers
+
+type userController struct {
+    userService interfaces.UserService  // ← интерфейс!
+}
+
+// ✅ Зависит от интерфейса сервиса, возвращаем интерфейс!
+func NewUserController(userService interfaces.UserService) interfaces.UserController {
+    return &userController{userService: userService}
+}
+
+func (c *userController) GetUser(w http.ResponseWriter, r *http.Request) {
+    // ... обработка
+}
+```
+
+#### 7. Зарегистрируйте в DI контейнере
+
+```go
+// internal/container/container.go
+func (c *Container) provideRepo() {
+    c.container.Provide(repositories.NewHealthcheckRepository)
+    c.container.Provide(repositories.NewUserRepository)  // ← добавьте
+}
+
+func (c *Container) provideService() {
+    c.container.Provide(services.NewHealthcheckService)
+    c.container.Provide(services.NewUserService)  // ← добавьте
+}
+
+func (c *Container) provideController() {
+    c.container.Provide(controllers.NewHealthcheckController)
+    c.container.Provide(controllers.NewUserController)  // ← добавьте
+}
+```
+
+#### 8. Добавьте маршруты
+
+```go
+// internal/router/router.go
+func Handler(diContainer *container.Container) http.Handler {
+    var userController interfaces.UserController
+    err := diContainer.Invoke(func(
+        ctrl interfaces.UserController,  // ← Dig автоматически разрешит цепочку!
+    ) {
+        userController = ctrl
+    })
+    
+    // ...
+    r.Get("/users/{id}", userController.GetUser)
+    r.Post("/users", userController.CreateUser)
+    
+    return r
+}
+```
+
+**Заметьте:** Dig **автоматически разрешит всю цепочку**:
+```
+*sqlx.DB 
+  ↓
+NewUserRepository → interfaces.UserRepository
+  ↓
+NewUserService → interfaces.UserService
+  ↓
+NewUserController → interfaces.UserController
+```
+
+Никаких ручных подключений - только регистрируем конструкторы, Dig сам найдёт зависимости!

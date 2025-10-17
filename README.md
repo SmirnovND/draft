@@ -63,10 +63,10 @@ cp -r go-base my-awesome-project
 cd my-awesome-project
 
 # 2. Переименуйте модуль
-# Замените в go.mod: github.com/SmirnovND/gobase → github.com/my-awesome-project
+# Замените в go.mod: github.com/SmirnovND/draft → github.com/my-awesome-project
 
 # 3. Замените импорты во всех файлах
-find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/gobase|github.com/my-awesome-project|g' {} +
+find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/draft|github.com/my-awesome-project|g' {} +
 
 # 4. Начинайте разработку!
 ```
@@ -122,25 +122,36 @@ make clean             # Очистить артефакты
 ```
 HTTP Request
     ↓
-[Controller] ← обработка HTTP, валидация
-    ↓
-[Usecase] ← бизнес-логика, оркестрация сервисов
-    ↓
-[Services] ← инкапсуляция логики работы с БД и внешними системами
-    ↓
-[Repository] ← работа с БД
+[Controller] ← зависит от interfaces.Service
+    ↓ (использует interfaces.*)
+[Usecase] ← зависит от interfaces.Service
+    ↓ (использует interfaces.*)
+[Services] ← реализуют interfaces.Service, зависят от interfaces.Repository
+    ↓ (используют interfaces.*)
+[Repository] ← реализуют interfaces.Repository
     ↓
 [Database]
 ```
 
-**Ключевое правило:** Usecase работает **ТОЛЬКО** через Services!
+**Ключевые правила:**
+1. 🔗 **Только интерфейсы** - все слои зависят от интерфейсов, не от конкретных типов
+2. 💉 **Dependency Injection** - Uber Dig автоматически разрешает зависимости через интерфейсы
+3. 🧪 **Тестируемость** - легко подменить зависимости мокированными интерфейсами
+4. 🎯 **Slabaya связанность** - каждый слой независим от деталей реализации нижних слоёв
 
 **Слои:**
 1. **Domain** - доменные модели (User, Product, etc.)
-2. **Repository** - работа с базой данных
-3. **Service** - инкапсуляция работы с данными и внешними системами
-4. **Usecase** - бизнес-логика приложения (работает через Services)
-5. **Controller** - HTTP обработчики (работают через Usecases)
+2. **Repository** - работа с БД (реализуют `interfaces.Repository`)
+3. **Service** - инкапсуляция логики (реализуют `interfaces.Service`, зависят от `interfaces.Repository`)
+4. **Usecase** - бизнес-логика (зависят от `interfaces.Service`)
+5. **Controller** - HTTP обработчики (зависят от `interfaces.Service`)
+
+**Пример сигнатуры:**
+```go
+// Repository → Service → Controller (через интерфейсы!)
+func NewService(repo interfaces.Repository) interfaces.Service { ... }
+func NewController(svc interfaces.Service) interfaces.Controller { ... }
+```
 
 📖 **Подробнее:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
@@ -166,28 +177,38 @@ cmd/crons/
 
 Пример: добавим управление продуктами
 
-### 1. Создайте миграцию
+### 1️⃣ Добавьте интерфейсы в `internal/interfaces/`
+
+```go
+// internal/interfaces/repository.go (добавьте)
+type ProductRepository interface {
+    Create(ctx context.Context, product *domain.Product) error
+    GetByID(ctx context.Context, id int64) (*domain.Product, error)
+}
+
+// internal/interfaces/service.go (добавьте)
+type ProductService interface {
+    GetProduct(ctx context.Context, id int64) (*domain.Product, error)
+    CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error)
+}
+
+// internal/interfaces/controller.go (добавьте)
+type ProductController interface {
+    GetProduct(w http.ResponseWriter, r *http.Request)
+    CreateProduct(w http.ResponseWriter, r *http.Request)
+}
+```
+
+### 2️⃣ Создайте миграцию
 
 ```bash
 make migrate-create name=create_products_table
 ```
 
-```sql
--- migrations/000002_create_products_table.up.sql
-CREATE TABLE products (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    price DECIMAL(10,2) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### 2. Создайте модель
+### 3️⃣ Создайте модель в `domain/`
 
 ```go
 // internal/domain/product.go
-package domain
-
 type Product struct {
     ID        int64   `db:"id"`
     Name      string  `db:"name"`
@@ -196,111 +217,64 @@ type Product struct {
 }
 ```
 
-### 3. Создайте репозиторий
+### 4️⃣ Создайте репозиторий (реализует интерфейс!)
 
 ```go
 // internal/repositories/product_repository.go
-package repositories
-
-type ProductRepository interface {
-    Create(ctx context.Context, product *domain.Product) error
-    GetByID(ctx context.Context, id int64) (*domain.Product, error)
-}
-
 type productRepository struct {
     db *sqlx.DB
 }
 
-func NewProductRepository(db *sqlx.DB) ProductRepository {
+// ✅ Возвращаем интерфейс!
+func NewProductRepository(db *sqlx.DB) interfaces.ProductRepository {
     return &productRepository{db: db}
+}
+
+func (r *productRepository) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
+    // ... реализация
 }
 ```
 
-### 4. Создайте сервис
+### 5️⃣ Создайте сервис (зависит от интерфейса, реализует интерфейс!)
 
 ```go
 // internal/services/product_service.go
-package services
-
-type ProductService struct {
-    repo repositories.ProductRepository
+type productService struct {
+    repo interfaces.ProductRepository  // ← интерфейс!
 }
 
-func NewProductService(repo repositories.ProductRepository) *ProductService {
-    return &ProductService{repo: repo}
+// ✅ Зависит от интерфейса, возвращает интерфейс!
+func NewProductService(repo interfaces.ProductRepository) interfaces.ProductService {
+    return &productService{repo: repo}
 }
 
-// GetProduct - получить продукт по ID
-func (s *ProductService) GetProduct(ctx context.Context, id int64) (*domain.Product, error) {
-    return s.repo.GetByID(ctx, id)
-}
-
-// CreateProduct - создать продукт
-func (s *ProductService) CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error) {
-    product := &domain.Product{
-        Name: name,
-        Price: price,
-    }
+func (s *productService) CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error) {
+    product := &domain.Product{Name: name, Price: price}
     return product, s.repo.Create(ctx, product)
 }
 ```
 
-### 5. Создайте usecase
-
-```go
-// internal/usecases/product_usecase.go
-package usecases
-
-type ProductUsecase struct {
-    productService *services.ProductService
-}
-
-func NewProductUsecase(productService *services.ProductService) *ProductUsecase {
-    return &ProductUsecase{
-        productService: productService,
-    }
-}
-
-// CreateProduct - бизнес-логика создания продукта
-func (uc *ProductUsecase) CreateProduct(ctx context.Context, name string, price float64) (*domain.Product, error) {
-    // Через сервис, не напрямую через репозиторий!
-    return uc.productService.CreateProduct(ctx, name, price)
-}
-```
-
-### 6. Создайте контроллер
+### 6️⃣ Создайте контроллер (зависит от интерфейса, реализует интерфейс!)
 
 ```go
 // internal/controllers/product_controller.go
-package controllers
-
-type ProductController struct {
-    productUsecase *usecases.ProductUsecase
+type productController struct {
+    productService interfaces.ProductService  // ← интерфейс!
 }
 
-func NewProductController(productUsecase *usecases.ProductUsecase) *ProductController {
-    return &ProductController{
-        productUsecase: productUsecase,
-    }
+// ✅ Зависит от интерфейса, возвращает интерфейс!
+func NewProductController(productService interfaces.ProductService) interfaces.ProductController {
+    return &productController{productService: productService}
 }
 
-func (c *ProductController) Create(w http.ResponseWriter, r *http.Request) {
-    // Обработка запроса и вызов use case
+func (c *productController) Create(w http.ResponseWriter, r *http.Request) {
     var req struct {
         Name  string  `json:"name"`
         Price float64 `json:"price"`
     }
     
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
-    
-    product, err := c.productUsecase.CreateProduct(r.Context(), req.Name, req.Price)
-    if err != nil {
-        http.Error(w, "Failed to create product", http.StatusInternalServerError)
-        return
-    }
+    json.NewDecoder(r.Body).Decode(&req)
+    product, err := c.productService.CreateProduct(r.Context(), req.Name, req.Price)
     
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(http.StatusCreated)
@@ -308,32 +282,41 @@ func (c *ProductController) Create(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### 7. Зарегистрируйте в DI
+### 7️⃣ Зарегистрируйте в DI контейнере
 
 ```go
 // internal/container/container.go
-func (c *Container) RegisterRepositories() {
-    c.container.Provide(repositories.NewProductRepository)
+func (c *Container) provideRepo() {
+    c.container.Provide(repositories.NewProductRepository)  // ← добавьте
 }
 
-func (c *Container) RegisterServices() {
-    c.container.Provide(services.NewProductService)
+func (c *Container) provideService() {
+    c.container.Provide(services.NewProductService)  // ← добавьте
 }
 
-func (c *Container) RegisterUsecases() {
-    c.container.Provide(usecases.NewProductUsecase)
-}
-
-func (c *Container) RegisterControllers() {
-    c.container.Provide(controllers.NewProductController)
+func (c *Container) provideController() {
+    c.container.Provide(controllers.NewProductController)  // ← добавьте
 }
 ```
 
-### 8. Добавьте маршрут
+### 8️⃣ Добавьте маршрут
 
 ```go
 // internal/router/router.go
-r.Post("/api/products", productController.Create)
+var productController interfaces.ProductController
+diContainer.Invoke(func(ctrl interfaces.ProductController) {
+    productController = ctrl
+})
+
+r.Get("/api/products/{id}", productController.GetProduct)
+r.Post("/api/products", productController.CreateProduct)
+```
+
+**Результат:** Dig автоматически построит цепочку:
+```
+*sqlx.DB → NewProductRepository → interfaces.ProductRepository
+         → NewProductService → interfaces.ProductService
+         → NewProductController → interfaces.ProductController
 ```
 
 📖 **Больше примеров:** [QUICKSTART.md](QUICKSTART.md)

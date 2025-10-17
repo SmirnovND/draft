@@ -2,18 +2,15 @@ package repositories
 
 import (
 	"context"
+	"github.com/SmirnovND/gobase/internal/interfaces"
 	"github.com/jmoiron/sqlx"
 )
-
-type HealthcheckRepository interface {
-	Ping(ctx context.Context) error
-}
 
 type healthcheckRepository struct {
 	db *sqlx.DB
 }
 
-func NewHealthcheckRepository(db *sqlx.DB) HealthcheckRepository {
+func NewHealthcheckRepository(db *sqlx.DB) interfaces.HealthcheckRepository {
 	return &healthcheckRepository{
 		db: db,
 	}

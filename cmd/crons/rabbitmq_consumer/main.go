@@ -22,6 +22,7 @@ func main() {
 
 func Run() error {
 	diContainer := container.NewContainer()
+	defer diContainer.Close()
 
 	var logger *zap.Logger
 	if err := diContainer.Invoke(func(l *zap.Logger) {
@@ -40,11 +41,6 @@ func Run() error {
 	if conn == nil {
 		return fmt.Errorf("failed to create RabbitMQ connection")
 	}
-
-	defer func() {
-		conn.Close()
-		logger.Info("RabbitMQ connection closed")
-	}()
 
 	// Создаем consumer для конкретной очереди
 	// Здесь используется очередь "tasks_queue", замените на вашу

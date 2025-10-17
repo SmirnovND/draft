@@ -28,7 +28,7 @@ git init
 
 ```go
 // Было:
-module github.com/SmirnovND/gobase
+module github.com/SmirnovND/draft
 
 // Стало:
 module github.com/yourusername/my-new-project
@@ -40,14 +40,14 @@ module github.com/yourusername/my-new-project
 
 ```bash
 # Замените yourusername/my-new-project на ваш путь
-find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/gobase|github.com/yourusername/my-new-project|g' {} +
+find . -type f -name "*.go" -exec sed -i '' 's|github.com/SmirnovND/draft|github.com/yourusername/my-new-project|g' {} +
 ```
 
 **Вариант 2: Используя IDE:**
 
 В GoLand/VSCode:
 1. Нажмите `Cmd+Shift+R` (Mac) или `Ctrl+Shift+R` (Windows/Linux)
-2. Найдите: `github.com/SmirnovND/gobase`
+2. Найдите: `github.com/SmirnovND/draft`
 3. Замените на: `github.com/yourusername/my-new-project`
 4. Замените во всех файлах
 

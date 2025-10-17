@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"github.com/SmirnovND/gobase/internal/container"
 	"github.com/SmirnovND/gobase/internal/interfaces"
@@ -12,6 +13,10 @@ import (
 	"github.com/jmoiron/sqlx"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	_ "github.com/SmirnovND/gobase/docs" // Swagger docs
 )
@@ -39,6 +44,7 @@ func main() {
 
 func Run() error {
 	diContainer := container.NewContainer()
+	defer diContainer.Close()
 
 	var cf interfaces.ConfigServer
 	if err := diContainer.Invoke(func(c interfaces.ConfigServer) {
@@ -61,47 +67,67 @@ func Run() error {
 	dbBase := dbx.DB
 	migrations.StartMigrations(dbBase)
 
-	// Инициализация RabbitMQ компонентов
-	var rmqConn *rabbitmq.RabbitMQConnection
-	var rmqProducer *rabbitmq.RabbitMQProducer
-	var rmqConsumer *rabbitmq.RabbitMQConsumer
-
-	if err := diContainer.Invoke(func(conn *rabbitmq.RabbitMQConnection) {
-		rmqConn = conn
-	}); err != nil {
+	// Инициализация RabbitMQ компонентов через контейнер (управление жизненным циклом)
+	if err := diContainer.Invoke(func(conn *rabbitmq.RabbitMQConnection) {}); err != nil {
 		return err
 	}
 
-	if err := diContainer.Invoke(func(producer *rabbitmq.RabbitMQProducer) {
-		rmqProducer = producer
-	}); err != nil {
+	if err := diContainer.Invoke(func(producer *rabbitmq.RabbitMQProducer) {}); err != nil {
 		return err
 	}
 
-	if err := diContainer.Invoke(func(consumer *rabbitmq.RabbitMQConsumer) {
-		rmqConsumer = consumer
-	}); err != nil {
+	if err := diContainer.Invoke(func(consumer *rabbitmq.RabbitMQConsumer) {}); err != nil {
 		return err
 	}
 
 	log.Println("RabbitMQ initialized successfully")
-	defer func() {
-		if rmqProducer != nil {
-			rmqProducer.Close()
-			log.Println("RabbitMQ producer closed")
-		}
-		if rmqConsumer != nil {
-			rmqConsumer.Close()
-			log.Println("RabbitMQ consumer closed")
-		}
-		if rmqConn != nil {
-			rmqConn.Close()
-			log.Println("RabbitMQ connection closed")
+
+	// Создание HTTP сервера
+	server := &http.Server{
+		Addr: cf.GetRunAddr(),
+		Handler: middleware.ChainMiddleware(
+			router.Handler(diContainer),
+			logger.WithLogging,
+		),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Канал для ошибок при запуске сервера
+	serverErrors := make(chan error, 1)
+
+	// Запуск сервера в горутине
+	go func() {
+		log.Printf("Starting server on %s", cf.GetRunAddr())
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErrors <- err
 		}
 	}()
 
-	return http.ListenAndServe(cf.GetRunAddr(), middleware.ChainMiddleware(
-		router.Handler(diContainer),
-		httplog.WithLogging,
-	))
+	// Обработка OS сигналов для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErrors:
+		return err
+	case sig := <-sigChan:
+		log.Printf("Received signal: %v", sig)
+
+		// Graceful shutdown с timeout в 30 секунд
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		log.Println("Shutting down server gracefully...")
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error during server shutdown: %v", err)
+			return err
+		}
+
+		log.Println("Server shut down successfully")
+
+		// Контейнер закроется автоматически через defer
+		return nil
+	}
 }

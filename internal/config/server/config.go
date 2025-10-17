@@ -14,7 +14,9 @@ type Config struct {
 }
 
 type Db struct {
-	Dsn string `yaml:"dsn"`
+	Dsn          string `yaml:"dsn"`
+	MaxOpenConns int    `yaml:"max_open_conns"`
+	MaxIdleConns int    `yaml:"max_idle_conns"`
 }
 
 type App struct {
@@ -27,6 +29,14 @@ type RabbitMQ struct {
 
 func (c *Config) GetDBDsn() string {
 	return c.Db.Dsn
+}
+
+func (c *Config) GetDBMaxOpenConns() int {
+	return c.Db.MaxOpenConns
+}
+
+func (c *Config) GetDBMaxIdleConns() int {
+	return c.Db.MaxIdleConns
 }
 
 func (c *Config) GetRunAddr() string {
